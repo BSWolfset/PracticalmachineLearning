@@ -1,0 +1,191 @@
+---
+title: "Predicting Quality of Exercise using Personal Fitness Devices"
+subtitle: "Practical Machine Learning: Prediction Assignment Writeup"
+author: "Beth Wolfset"
+date: "September 10, 2016"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Executive Summary
+ 
+The goal of this project is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to quantify the manner in which they did the exercise. The "classe" variable in the training set shows the outcome as levels 'A', 'B', 'C', 'D', 'E'. The project will examine the other variables and determine the best model to predict the outcome.
+
+This report describes the model, the method of cross validation, the expected out of sample error, and the reasons behind these choices. The models are used to predict 20 different test cases.
+
+# Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. Participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways.
+
+Additional information: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+# Data
+
+The training data for this project are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+
+The following libraries are needed to reproduce the results:
+
+```{r, echo=TRUE, warning=FALSE, message=FALSE}
+#install.packages("RCurl", dependencies = TRUE)
+library(RCurl)
+#install.packages("lubridate", dependencies = TRUE)
+library(lubridate)
+#install.packages("caret", dependencies = TRUE)
+library(caret)
+#install.packages("rattle", dependencies = TRUE)
+library(rattle)
+#install.packages("randomForest", dependencies = TRUE)
+library(randomForest)
+```
+
+### Load Data
+
+The data is downloaded from the website.  A file will be written to the working directory.  It is then read into dataset variables.
+
+```{r, echo=TRUE}
+# Load the training dataset:
+TrainingURL <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+TrainingFile <- "pml-training.csv"
+download.file(url=TrainingURL, destfile = TrainingFile)
+TrainingDS <- read.csv(TrainingFile, na.strings=c("NA","","#DIV/0!"), header=TRUE)
+TrainingColNames <- colnames(TrainingDS)
+
+# Load test dataset:
+TestingURL <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+TestingFile <- "pml-testing.csv"
+download.file(url=TestingURL, destfile = TestingFile)
+TestingDS <- read.csv(TestingFile, na.strings=c("NA","","#DIV/0!"), header=TRUE)
+TestingColNames <- colnames(TestingDS)
+# Verify that the column names are equal in the training and test set.
+all.equal(TrainingColNames[1:length(TrainingColNames)-1], TestingColNames[1:length(TestingColNames)-1])
+```
+
+This confirms that the number of columns in the Training and Testing sets is equal.  The exception is that the Training Data has the 'classe' column to use as the outcome.  The Testing set does not have a 'classe' column.  It does include a problem_id column that will be used for the submission.
+
+### Data Cleansing OF Training Data
+
+The training data requires cleansing.  When a column has no values for a significant portion of the rows, then it cannot be used as a predictor.  I chose to remove columns where greater than 60% of the values contained 'NA'.  This has the affect of also removing columns with significant numbers of nulls.  As a result, there are no columns with near zero variables.
+
+```{r}
+# Remove columns with more than 60% NA
+TrainingDS <- TrainingDS[, !sapply(TrainingDS, function(y) (sum(is.na(y))/length(y)) > 0.60 )]
+
+# Make sure classe is a factor
+TrainingDS$classe <- as.factor(TrainingDS$classe)
+
+# Remove columns with near Zero Variables - not needed once mostly NA columns removed
+#Nr0Var <- nearZeroVar(TrainingDS)
+#if(length(Nr0Var) > 0) TrainDSNZV <- TrainingDS[, -Nr0Var]
+```
+
+### Split Training Data Set
+It is important to determine how accurate the model is by determining the out of sample error.  The training set is large which allows it to be split for cross-validation.  In this way, the models will be trained on 65% of the training set and then used to predict the other 35% of the training set.
+
+```{r}
+set.seed(333)
+inTrain = createDataPartition(TrainingDS$classe, p=0.65)[[1]]
+MyTraining = TrainingDS[ inTrain,]
+MyTesting = TrainingDS[-inTrain,]
+
+# Remove first column so it cannot be used as predictor
+MyTraining <- MyTraining[c(-1)]
+```
+
+# Create the Predictive Models
+
+I have chosen to use two types of models to predict the quality of the exercises.  The first is the RPART model to generate a decision tree and look at its accuracy.  The seconds will be Random Forests.  In addition, I have used both the 'caret' package, and the specialized packages to train the models.
+
+The method used is to:
+1. Train the model on the 65% subset of training data (MyTraining)
+
+2. Predict the outcome of the 35% subset of training data (MyTesting)
+
+3. Evaluate the accuracy of the model
+
+### Recursive Partitioning and Regression Trees (Rpart) model
+```{r}
+# RPART using caret package
+mdlrpart <- train(classe ~ ., data=MyTraining, method = "rpart")
+# take a look at the model
+print(mdlrpart, digits=3)
+# take a better look at the decision tree
+fancyRpartPlot(mdlrpart$finalModel)
+# predict the MyTesting data and determine accuracy.
+predictrpart <- predict(mdlrpart, MyTesting )
+confusionMatrix(predictrpart, MyTesting$classe)
+# RPART using rpart package
+mdlrpart2 <- rpart(classe ~ ., data=MyTraining, method = "class")
+print(mdlrpart2, digits=3)
+fancyRpartPlot(mdlrpart2)
+predictrpart2 <- predict(mdlrpart2, MyTesting, type="class" )
+confusionMatrix(predictrpart2, MyTesting$classe)
+```
+
+The decision tree model is easy to understand.  Using the 'caret' package the accuracy is only 53%. Using the 'rpart' package the accuracy is 86%.  Is is suspicious that the models from the two packages have such a large variance.  From the diagram of the decision tree, it is easy to see that the models themselves differ significantly.
+
+## Random Forests Model
+```{r}
+# using caret package
+mdlrf <- train(classe ~ ., data=MyTraining, method = "rf")
+print(mdlrf, digits=3)
+print(mdlrf$finalModel, digits=3)
+predictrf <- predict(mdlrf, MyTesting )
+confusionMatrix(predictrf, MyTesting$classe)
+
+# using randomForest package
+mdlrf2 <- randomForest(classe ~ ., data=MyTraining)
+print(mdlrf2, digits=3)
+print(mdlrf2$finalModel, digits=3)
+predictrf2 <- predict(mdlrf2, MyTesting )
+confusionMatrix(predictrf2, MyTesting$classe)
+```
+
+Using the  Random Forests model from both the 'caret' and 'randomForest' package was able to predict the MyTesting set with .99% accuracy.  That is excellent accuracy which is suspicious.  It could be that the model has been overfit and there is not enough out of sample error to prove it wrong.
+
+# Preparing the Testing Submission
+
+Now that the models have been trained, they are used to predict the testing data.
+
+## Make Predictions on TestingDS
+```{r}
+# RPart from caret
+predictrpartTesting <- predict(mdlrpart, TestingDS )
+print(predictrpartTesting)
+# RPart from rpart
+predictrpartTesting2 <- predict(mdlrpart2, TestingDS, type="class"  )
+print(predictrpartTesting2)
+# Random Forest from caret
+predictrfTesting <- predict(mdlrf, TestingDS )
+print(predictrfTesting)
+# Random Forest from randomForest - since the random forest models are so similar, only used first to predict outcomes.
+#predictrfTesting2 <- predict(mdlrf2, TestingDS, type="class" )
+#print(predictrfTesting2)
+```
+
+# Conclusions and Assumptions
+
+Random Forest created a more accurate prediction model.  It took considerable more time to build this model and that will be an issue for large data sets.  The RPART model ran much faster but is also less accurate.
+
+The expected out-of-sample error can be calculated as (1 - accuracy)
+
+RPART using caret had Accuracy .6134 with out of sample error .3866 or 39%
+
+RPART using rpart had Accuracy .8744 with out of sample error .1256 or 13%
+
+Random Forest using caret had Accuracy .9996 with out of sample error .0004 or less than 1%
+
+Random Forest using randomForest had Accuracy .9985 with out of sample error .0015 or less than 1%
+
+
+I used two different r packages to run the models.
+For the RPARTS model, the accuracy of the models generated differed significantly.  Similarly, the  predictions of the test data were quite different.
+For the Random Forests models, both packages yielded models with similar accuracy.
